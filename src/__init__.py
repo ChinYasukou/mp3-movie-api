@@ -1,15 +1,16 @@
 """Supporting modules for the data processing API."""
 
 from .models import (
-    DatasetInfo,
+    MovieDataResponse,
+    MovieUploadInfo,
     HealthResponse,
     MissingSettings,
     OutlierSettings,
     ProcessConfig,
-    ProcessingReport,
+    MovieProcessingReport,
     ProcessingSettings,
     ValidationSettings,
 )
-from .storage import DatasetStorage
+from .storage import MovieStorage
 from .middleware import log_requests
 from .utils import setup_logging

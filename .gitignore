@@ -8,3 +8,5 @@ htmlcov/
 *.log
 .DS_Store
 .env
+
+data/
