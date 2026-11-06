@@ -12,6 +12,7 @@ import main
 def client(tmp_path, monkeypatch):
     db_path = tmp_path / "movies.db"
     monkeypatch.setattr(main, "storage", main.MovieStorage(db_path))
+    monkeypatch.setattr(main, "cache", main.MovieCache())
     with TestClient(main.app) as test_client:
         yield test_client
 

@@ -110,3 +110,34 @@ def test_rejected_processing_preserves_collection(client, uploaded_movies, body)
     before = client.get("/movies").json()
     assert client.post("/movies/process", json=body).status_code == 400
     assert client.get("/movies").json() == before
+
+
+def test_repeated_movie_list_uses_cache_by_limit(client, uploaded_movies, monkeypatch):
+    import main
+
+    select_columns = main.storage.select_columns
+    calls = []
+
+    def track_select(columns, limit):
+        calls.append(limit)
+        return select_columns(columns, limit)
+
+    monkeypatch.setattr(main.storage, "select_columns", track_select)
+    first = client.get("/movies?limit=1").json()
+    assert client.get("/movies?limit=1").json() == first
+    assert len(client.get("/movies?limit=2").json()["data"]) == 2
+    assert calls == [1, 2]
+
+
+def test_successful_writes_invalidate_all_list_limits(client, uploaded_movies):
+    assert client.get("/movies?limit=1").json()["total_rows"] == 20
+    assert client.get("/movies?limit=2").json()["total_rows"] == 20
+
+    assert client.post("/movies/process", json={}).status_code == 200
+    assert client.get("/movies?limit=1").json()["total_rows"] == 18
+    assert client.get("/movies?limit=2").json()["total_rows"] == 18
+
+    contents = b"title,release_year,rating,genre\nNew Movie,2025,9,Drama\n"
+    assert client.post("/upload", files={"file": ("new.csv", contents)}).status_code == 200
+    assert client.get("/movies?limit=1").json()["data"][0]["title"] == "New Movie"
+    assert client.get("/movies?limit=2").json()["total_rows"] == 1
