@@ -14,3 +14,4 @@ from .models import (
 from .storage import MovieStorage
 from .middleware import log_requests
 from .utils import setup_logging
+from .cache import MovieCache

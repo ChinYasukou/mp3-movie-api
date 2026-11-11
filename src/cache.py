@@ -1,21 +1,36 @@
 """Process-local cache for movie list responses."""
 
 import json
+import logging
 
-from fakeredis import FakeRedis
+import fakeredis
+
+
+logger = logging.getLogger(__name__)
 
 
 class MovieCache:
     def __init__(self):
-        self._redis = FakeRedis(decode_responses=True)
+        self.client = fakeredis.FakeRedis(decode_responses=True)
+
+    def make_key(self, limit):
+        return f"movies:limit:{limit}"
 
     def get(self, limit):
-        payload = self._redis.get(f"movies:list:{limit}")
-        return json.loads(payload) if payload is not None else None
+        """Return the cached response dictionary, or None."""
+        key = self.make_key(limit)
+        payload = self.client.get(key)
+        if payload is None:
+            logger.debug("Cache MISS: %s", key)
+            return None
+        logger.debug("Cache HIT: %s", key)
+        return json.loads(payload)
 
     def set(self, limit, response):
-        self._redis.set(f"movies:list:{limit}", json.dumps(response), ex=60)
+        """Cache the complete movie response for 90 seconds."""
+        self.client.set(self.make_key(limit), json.dumps(response), ex=90)
 
     def invalidate(self):
         """Discard every list variant from this dedicated cache."""
-        self._redis.flushdb()
+        self.client.flushdb()
+        logger.debug("Invalidated movie cache")

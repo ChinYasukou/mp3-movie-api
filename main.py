@@ -12,6 +12,7 @@ from starlette.concurrency import run_in_threadpool
 from data_pipeline import create_cleaning_report, process_data, validate_dataframe
 from src import (
     HealthResponse,
+    MovieCache,
     MovieDataResponse,
     MovieProcessingReport,
     MovieStorage,
@@ -20,7 +21,6 @@ from src import (
     log_requests,
     setup_logging,
 )
-from src.cache import MovieCache
 from src.storage import MOVIE_COLUMNS
 
 
