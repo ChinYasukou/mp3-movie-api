@@ -2,6 +2,9 @@
 
 import pytest
 
+import main
+from src import MovieStorage
+
 
 def test_health(client):
     response = client.get("/health")
@@ -109,6 +112,7 @@ def test_column_cleanup_keeps_fixed_sql_schema(client):
 def test_rejected_processing_preserves_collection(client, uploaded_movies, body):
     before = client.get("/movies").json()
     assert client.post("/movies/process", json=body).status_code == 400
+    assert main.cache.get(100) == before
     assert client.get("/movies").json() == before
 
 
@@ -141,3 +145,90 @@ def test_successful_writes_invalidate_all_list_limits(client, uploaded_movies):
     assert client.post("/upload", files={"file": ("new.csv", contents)}).status_code == 200
     assert client.get("/movies?limit=1").json()["data"][0]["title"] == "New Movie"
     assert client.get("/movies?limit=2").json()["total_rows"] == 1
+
+
+def test_movies_persist(client, test_storage, uploaded_movies):
+    reopened = MovieStorage(test_storage.db_path)
+    movies = reopened.get()
+    assert reopened.count_movies() == len(movies) == 20
+    assert movies.columns.tolist() == ["title", "release_year", "rating", "genre"]
+    assert movies["title"].tolist() == [
+        "Movie A", "Movie B", "Movie B", "Movie C", "Movie D", "Movie D",
+        "Movie E", "Movie F", "Movie G", "Movie H", "Movie I", "Movie J",
+        "Movie K", "Movie L", "Movie M", "Movie N", "Movie O", "Movie P",
+        "Movie Q", "Movie R",
+    ]
+    response = client.get("/movies?limit=100")
+    assert response.status_code == 200
+    assert [row["id"] for row in reopened.select_columns(["title"], limit=100)] == list(range(1, 21))
+    assert [row["id"] for row in response.json()["data"]] == list(range(1, 21))
+
+
+def test_cache_and_processing(client, uploaded_movies, processing_body):
+    for limit in (100, 1):
+        response = client.get("/movies", params={"limit": limit})
+        assert response.status_code == 200
+        assert main.cache.get(limit) == response.json()
+    cached = main.cache.get(100)
+    repeated = client.get("/movies?limit=100")
+    assert repeated.status_code == 200
+    assert repeated.json() == cached
+
+    processed = client.post("/movies/process", json=processing_body)
+    assert processed.status_code == 200
+    assert processed.json() == {
+        "validation_rows_removed": 0,
+        "cleaning_report": {
+            "rows_before": 20, "rows_after": 16, "rows_removed": 4,
+            "columns_before": 4, "columns_after": 4, "columns_removed": 0,
+        },
+    }
+    assert main.cache.get(100) is None
+    assert main.cache.get(1) is None
+    retrieved = client.get("/movies?limit=100")
+    assert retrieved.status_code == 200
+    result = retrieved.json()
+    assert result["total_rows"] == len(result["data"]) == 16
+    assert [row["title"] for row in result["data"]] == [
+        f"Movie {letter}" for letter in "ABCDEFGHIJKLMNOP"
+    ]
+    assert [row["id"] for row in result["data"]] == list(range(1, 17))
+    assert main.cache.get(100) == result
+
+
+def test_cache_hit_skips_database(client, uploaded_movies, monkeypatch):
+    response = client.get("/movies?limit=100")
+    assert response.status_code == 200
+
+    def unexpected_database_call(*args, **kwargs):
+        pytest.fail("Cache hit must skip SQL selection and counting")
+
+    monkeypatch.setattr(main.storage, "select_columns", unexpected_database_call)
+    monkeypatch.setattr(main.storage, "count_movies", unexpected_database_call)
+    repeated = client.get("/movies?limit=100")
+    assert repeated.status_code == 200
+    assert repeated.json() == response.json()
+
+
+@pytest.mark.parametrize("operation", ["upload", "process"])
+def test_failed_save_preserves_collection_and_cache(
+    client, uploaded_movies, sample_csv_bytes, test_storage, monkeypatch, operation
+):
+    import sqlite3
+
+    before = test_storage.get()
+    for limit in (100, 1):
+        assert client.get("/movies", params={"limit": limit}).status_code == 200
+    cached = {limit: main.cache.get(limit) for limit in (100, 1)}
+
+    def failed_save(df):
+        raise sqlite3.OperationalError("Simulated save failure")
+
+    monkeypatch.setattr(main.storage, "save", failed_save)
+    if operation == "upload":
+        response = client.post("/upload", files={"file": ("sample.csv", sample_csv_bytes)})
+    else:
+        response = client.post("/movies/process", json={})
+    assert response.status_code == 500
+    assert test_storage.get().equals(before)
+    assert {limit: main.cache.get(limit) for limit in (100, 1)} == cached
